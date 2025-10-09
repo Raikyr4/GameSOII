@@ -10,28 +10,29 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# Windows usa 'spawn'; defina o start method cedo
-try:
-    mp.set_start_method("spawn", force=True)
-except RuntimeError:
-    pass
+# Windows usa 'spawn'; defina cedo
+if __name__ != "__main__":
+    try:
+        mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
 
 # ----------------------------
 # Handles compartilháveis (pickláveis)
 # ----------------------------
 @dataclass
 class SharedHandles:
-    minerals: Any        # mp.Value('i')
-    energy: Any          # mp.Value('i')
-    crystals: Any        # mp.Value('i')
-    running: Any         # mp.Value('b')
-    stats: Any           # manager.dict
-    logs: Any            # manager.list
-    shared_mem: Any      # manager.list
-    miners: Any          # manager.dict
-    sem: Any             # mp.Semaphore
-    lock: Any            # mp.Lock
-    events_queue: Any    # mp.Queue
+    minerals: Any
+    energy: Any
+    crystals: Any
+    running: Any
+    stats: Any
+    logs: Any
+    shared_mem: Any
+    miners: Any
+    sem: Any
+    lock: Any
+    events_queue: Any
 
 # ----------------------------
 # Estado (apenas no processo-pai)
@@ -68,11 +69,9 @@ class State:
             events_queue=self.events_queue,
         )
 
-# GLOBAL lazy
 STATE: Optional[State] = None
 
 def init_state() -> State:
-    """Cria o STATE apenas quando chamado (p.ex. no startup)."""
     global STATE
     if STATE is not None:
         return STATE
@@ -95,42 +94,65 @@ def init_state() -> State:
     return STATE
 
 # ----------------------------
-# Helpers compartilhados
+# Helpers
 # ----------------------------
 COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899']
 
 def push_log(h: SharedHandles, message: str, level: str = "info") -> None:
     ts = time.strftime("%H:%M:%S")
     entry = {"time": ts, "level": level, "message": message}
-    with h.lock:
+    try:
         h.logs.append(entry)
         while len(h.logs) > 200:
             try:
                 h.logs.pop(0)
-            except Exception:
+            except:
                 break
+    except:
+        pass
+    
     try:
         h.events_queue.put_nowait({"type": "log", "data": entry})
-    except Exception:
+    except:
         pass
 
+def make_state_from_handles(h: SharedHandles) -> Dict[str, Any]:
+    try:
+        return {
+            "resources": {
+                "minerals": int(h.minerals.value),
+                "energy": int(h.energy.value),
+                "crystals": int(h.crystals.value),
+            },
+            "stats": {
+                "totalMined": int(h.stats.get("totalMined", 0)),
+                "conflicts": int(h.stats.get("conflicts", 0)),
+                "synchronized": int(h.stats.get("synchronized", 0)),
+            },
+            "miners": {int(k): dict(h.miners[k]) for k in list(h.miners.keys())},
+            "isRunning": bool(h.running.value),
+        }
+    except:
+        return {
+            "resources": {"minerals": 0, "energy": 0, "crystals": 0},
+            "stats": {"totalMined": 0, "conflicts": 0, "synchronized": 0},
+            "miners": {},
+            "isRunning": False,
+        }
+
 def snapshot(s: State) -> Dict[str, Any]:
-    miners = {int(k): dict(s.miners[k]) for k in list(s.miners.keys())}
-    return {
-        "resources": {
-            "minerals": int(s.minerals.value),
-            "energy": int(s.energy.value),
-            "crystals": int(s.crystals.value),
-        },
-        "miners": miners,
-        "stats": {
-            "totalMined": int(s.stats.get("totalMined", 0)),
-            "conflicts": int(s.stats.get("conflicts", 0)),
-            "synchronized": int(s.stats.get("synchronized", 0)),
-        },
-        "logs": list(s.logs)[-50:],
-        "isRunning": bool(s.running.value),
-    }
+    base = make_state_from_handles(s.handles())
+    try:
+        base["logs"] = list(s.logs)[-50:]
+    except:
+        base["logs"] = []
+    return base
+
+def emit_state(s: State) -> None:
+    try:
+        s.events_queue.put_nowait({"type": "state", "data": make_state_from_handles(s.handles())})
+    except:
+        pass
 
 # ----------------------------
 # Workers
@@ -138,52 +160,96 @@ def snapshot(s: State) -> Dict[str, Any]:
 def miner_worker(miner_id: int, h: SharedHandles):
     random.seed(os.getpid() ^ int(time.time()))
     name = f"Minerador-{miner_id}"
+    
+    print(f"[WORKER {miner_id}] Iniciando processo PID={os.getpid()}")
 
-    h.miners[miner_id] = {
-        "id": miner_id,
-        "name": name,
-        "x": random.random() * 700,
-        "y": random.random() * 400,
-        "color": COLORS[miner_id % len(COLORS)],
-        "status": "idle",
-        "mined": 0,
-        "locked": False,
-        "target": None
-    }
-    push_log(h, f"✅ {name} iniciado (PID: {os.getpid()})", "success")
+    # Registro inicial
+    try:
+        h.miners[miner_id] = {
+            "id": miner_id,
+            "name": name,
+            "x": random.random() * 650 + 25,
+            "y": random.random() * 350 + 25,
+            "color": COLORS[miner_id % len(COLORS)],
+            "status": "idle",
+            "mined": 0,
+            "locked": False,
+            "target": None
+        }
+        push_log(h, f"✅ {name} iniciado (PID: {os.getpid()})", "success")
+    except Exception as e:
+        print(f"[WORKER {miner_id}] Erro no registro: {e}")
+        return
 
     try:
+        iteration = 0
         while True:
-            if not h.running.value:
-                time.sleep(0.3)
+            iteration += 1
+            
+            # Verifica se deve continuar
+            try:
+                is_running = h.running.value
+            except:
+                break
+
+            if not is_running:
+                time.sleep(0.5)
+                # Movimento sutil quando pausado
+                if random.random() < 0.2:
+                    try:
+                        m = dict(h.miners.get(miner_id, {}))
+                        m["x"] = max(25, min(675, m["x"] + random.uniform(-10, 10)))
+                        m["y"] = max(25, min(375, m["y"] + random.uniform(-10, 10)))
+                        m["status"] = "idle"
+                        h.miners[miner_id] = m
+                    except:
+                        pass
                 continue
 
-            attempt = random.random() < 0.45
-            target = "minerals" if (random.random() < 0.5) else "crystals"
+            # Decide se vai tentar minerar
+            attempt = random.random() < 0.6
+            target = "minerals" if random.random() < 0.6 else "crystals"
 
-            m = dict(h.miners[miner_id])
-            m["target"] = target
-            m["status"] = "waiting"
-            m["locked"] = False
-            h.miners[miner_id] = m
+            # Atualiza status: aguardando
+            try:
+                m = dict(h.miners.get(miner_id, {}))
+                m["target"] = target
+                m["status"] = "waiting"
+                m["locked"] = False
+                h.miners[miner_id] = m
+            except:
+                pass
 
             if attempt:
-                acquired = h.sem.acquire(timeout=0.5)
+                # Tenta adquirir semáforo
+                acquired = h.sem.acquire(timeout=0.8)
+                
                 if not acquired:
-                    with h.lock:
+                    # Conflito!
+                    try:
                         h.stats["conflicts"] = int(h.stats.get("conflicts", 0)) + 1
-                    time.sleep(0.2 + random.random() * 0.3)
+                        print(f"[WORKER {miner_id}] Conflito detectado!")
+                    except:
+                        pass
+                    time.sleep(0.3 + random.random() * 0.4)
                     continue
 
+                # Entrou na seção crítica
                 try:
-                    m = dict(h.miners[miner_id])
-                    m["locked"] = True
-                    m["status"] = "mining"
-                    h.miners[miner_id] = m
+                    # Marca como minerando
+                    try:
+                        m = dict(h.miners.get(miner_id, {}))
+                        m["locked"] = True
+                        m["status"] = "mining"
+                        h.miners[miner_id] = m
+                    except:
+                        pass
 
-                    time.sleep(0.15 + random.random() * 0.2)
+                    # Simula tempo de mineração
+                    time.sleep(0.3 + random.random() * 0.4)
 
-                    with h.lock:
+                    # Minera recurso
+                    try:
                         if target == "minerals" and h.minerals.value > 0:
                             delta = min(5, h.minerals.value)
                             h.minerals.value -= delta
@@ -195,14 +261,8 @@ def miner_worker(miner_id: int, h: SharedHandles):
                             m["mined"] = int(m.get("mined", 0)) + delta
                             h.miners[miner_id] = m
 
-                            h.shared_mem.append({"ts": time.time(), "actor": name, "op": "mine_minerals", "amount": delta})
-                            while len(h.shared_mem) > 200:
-                                try:
-                                    h.shared_mem.pop(0)
-                                except Exception:
-                                    break
-
-                            push_log(h, f"⛏️ {name} minerou minerais ({delta})", "success")
+                            push_log(h, f"⛏️ {name} minerou {delta} minerais", "success")
+                            print(f"[WORKER {miner_id}] Minerou {delta} minerais")
 
                         elif target == "crystals" and h.crystals.value > 0:
                             delta = min(3, h.crystals.value)
@@ -215,98 +275,112 @@ def miner_worker(miner_id: int, h: SharedHandles):
                             m["mined"] = int(m.get("mined", 0)) + delta
                             h.miners[miner_id] = m
 
-                            h.shared_mem.append({"ts": time.time(), "actor": name, "op": "mine_crystals", "amount": delta})
-                            while len(h.shared_mem) > 200:
-                                try:
-                                    h.shared_mem.pop(0)
-                                except Exception:
-                                    break
+                            push_log(h, f"💎 {name} coletou {delta} cristais", "success")
+                            print(f"[WORKER {miner_id}] Coletou {delta} cristais")
 
-                            push_log(h, f"💎 {name} coletou cristais ({delta})", "success")
-
-                    # movimento aleatório
-                    m = dict(h.miners[miner_id])
-                    m["x"] = max(0, min(700, m["x"] + random.uniform(-60, 60)))
-                    m["y"] = max(0, min(400, m["y"] + random.uniform(-40, 40)))
-                    h.miners[miner_id] = m
-                finally:
-                    try:
+                        # Move após minerar
                         m = dict(h.miners[miner_id])
+                        m["x"] = max(25, min(675, m["x"] + random.uniform(-80, 80)))
+                        m["y"] = max(25, min(375, m["y"] + random.uniform(-60, 60)))
+                        h.miners[miner_id] = m
+
+                    except Exception as e:
+                        print(f"[WORKER {miner_id}] Erro ao minerar: {e}")
+
+                finally:
+                    # Libera lock e semáforo
+                    try:
+                        m = dict(h.miners.get(miner_id, {}))
                         m["locked"] = False
                         m["status"] = "idle"
                         m["target"] = None
                         h.miners[miner_id] = m
-                    except Exception:
+                    except:
                         pass
+                    
                     h.sem.release()
 
-            time.sleep(0.25 + random.random() * 0.3)
+            else:
+                # Movimento sem minerar
+                try:
+                    m = dict(h.miners.get(miner_id, {}))
+                    m["x"] = max(25, min(675, m["x"] + random.uniform(-20, 20)))
+                    m["y"] = max(25, min(375, m["y"] + random.uniform(-15, 15)))
+                    m["status"] = "idle"
+                    m["target"] = None
+                    h.miners[miner_id] = m
+                except:
+                    pass
+
+            # Pausa entre ações
+            time.sleep(0.4 + random.random() * 0.6)
+
     except KeyboardInterrupt:
-        pass
+        print(f"[WORKER {miner_id}] Interrompido por usuário")
     except Exception as ex:
+        print(f"[WORKER {miner_id}] Erro fatal: {ex}")
         push_log(h, f"❌ {name} falhou: {ex}", "error")
     finally:
         try:
-            d = dict(h.miners.get(miner_id, {}))
-            d["status"] = "terminated"
-            h.miners[miner_id] = d
-        except Exception:
+            if miner_id in h.miners:
+                d = dict(h.miners[miner_id])
+                d["status"] = "terminated"
+                h.miners[miner_id] = d
+        except:
             pass
         push_log(h, f"🛑 {name} finalizado", "warning")
+        print(f"[WORKER {miner_id}] Processo finalizado")
 
 def regenerator_worker(h: SharedHandles):
+    print("[REGEN] Processo de regeneração iniciado")
     try:
         while True:
-            with h.lock:
-                h.minerals.value = min(100, h.minerals.value + 1)
-                h.energy.value   = min(100, h.energy.value + 2)
-                c = h.crystals.value + 1 if (int(time.time()) % 4 == 0) else h.crystals.value
-                h.crystals.value = min(50, c)
-
-            snap = {
-                "resources": {
-                    "minerals": int(h.minerals.value),
-                    "energy": int(h.energy.value),
-                    "crystals": int(h.crystals.value),
-                },
-                "stats": {
-                    "totalMined": int(h.stats.get("totalMined", 0)),
-                    "conflicts": int(h.stats.get("conflicts", 0)),
-                    "synchronized": int(h.stats.get("synchronized", 0)),
-                },
-                "miners": {int(k): dict(h.miners[k]) for k in list(h.miners.keys())},
-                "isRunning": bool(h.running.value),
-            }
             try:
-                h.events_queue.put_nowait({"type": "state", "data": snap})
-            except Exception:
+                h.minerals.value = min(100, h.minerals.value + 2)
+                h.energy.value = min(100, h.energy.value + 3)
+                
+                if int(time.time()) % 3 == 0:
+                    h.crystals.value = min(50, h.crystals.value + 1)
+            except:
                 pass
 
-            time.sleep(0.2)
+            try:
+                h.events_queue.put_nowait({"type": "state", "data": make_state_from_handles(h)})
+            except:
+                pass
+
+            time.sleep(0.25)
     except KeyboardInterrupt:
-        pass
+        print("[REGEN] Interrompido")
+    except Exception as e:
+        print(f"[REGEN] Erro: {e}")
 
 # ----------------------------
 # FastAPI
 # ----------------------------
-app = FastAPI(title="Shared Memory Mining - Python Backend", version="1.0.2")
+app = FastAPI(title="Shared Memory Mining", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # liberar geral no dev
-    allow_credentials=False,      # precisa ser False para usar "*"
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.on_event("startup")
 def _startup():
-    s = init_state()  # cria Manager/Values/etc aqui
+    print("=" * 60)
+    print("🚀 Iniciando servidor FastAPI")
+    print("=" * 60)
+    s = init_state()
     if s.regen_proc is None or not s.regen_proc.is_alive():
         p = mp.Process(target=regenerator_worker, args=(s.handles(),), daemon=True)
         p.start()
         s.regen_proc = p
+        print(f"✅ Regenerador iniciado (PID: {p.pid})")
         push_log(s.handles(), "🔧 Regenerador de recursos iniciado", "info")
+        emit_state(s)
 
 @app.get("/api/state")
 def get_state():
@@ -318,6 +392,8 @@ def start():
     s = init_state()
     s.running.value = True
     push_log(s.handles(), "▶️ Execução iniciada", "success")
+    emit_state(s)
+    print("▶️ Execução INICIADA")
     return {"ok": True, "isRunning": True}
 
 @app.post("/api/pause")
@@ -325,80 +401,152 @@ def pause():
     s = init_state()
     s.running.value = False
     push_log(s.handles(), "⏸️ Execução pausada", "warning")
+    emit_state(s)
+    print("⏸️ Execução PAUSADA")
     return {"ok": True, "isRunning": False}
 
 @app.post("/api/reset")
 def reset():
     s = init_state()
+    print("🔄 Iniciando RESET...")
+    
+    # Pausa execução
+    s.running.value = False
+    time.sleep(0.3)
+    
+    # Encerra todos os mineradores
     for mid, proc in list(s.processes.items()):
+        print(f"  Encerrando minerador {mid}...")
         if proc.is_alive():
             proc.terminate()
-        proc.join(timeout=0.5)
+        proc.join(timeout=1.5)
+        if proc.is_alive():
+            proc.kill()
         s.processes.pop(mid, None)
 
-    with s.lock:
-        s.miners.clear()
-        s.logs[:] = []
-        s.stats["totalMined"] = 0
-        s.stats["conflicts"] = 0
-        s.stats["synchronized"] = 0
-        s.minerals.value = 100
-        s.energy.value = 100
-        s.crystals.value = 50
-        s.running.value = False
+    # Limpa tudo
+    s.miners.clear()
+    s.logs[:] = []
+    s.stats["totalMined"] = 0
+    s.stats["conflicts"] = 0
+    s.stats["synchronized"] = 0
+    s.minerals.value = 100
+    s.energy.value = 100
+    s.crystals.value = 50
 
     push_log(s.handles(), "🔄 Sistema reiniciado", "info")
+    emit_state(s)
+    print("✅ RESET completo!")
     return {"ok": True}
 
 @app.post("/api/miners")
 def create_miner():
     s = init_state()
-    if len(s.processes) >= 6:
+    
+    # Limpa processos mortos
+    for mid, proc in list(s.processes.items()):
+        if not proc.is_alive():
+            s.processes.pop(mid, None)
+            if mid in s.miners:
+                try:
+                    del s.miners[mid]
+                except:
+                    pass
+    
+    active_count = len(s.processes)
+    
+    if active_count >= 6:
         push_log(s.handles(), "⚠️ Máximo de 6 mineradores atingido", "warning")
-        return JSONResponse({"error": "max_miners"}, status_code=400)
+        emit_state(s)
+        return JSONResponse({"error": "max_miners", "message": "Máximo de 6 mineradores"}, status_code=400)
 
+    # Encontra ID disponível
     new_id = 0
     while new_id in s.processes:
         new_id += 1
 
+    print(f"➕ Criando minerador {new_id}...")
     p = mp.Process(target=miner_worker, args=(new_id, s.handles(),), daemon=True)
     p.start()
     s.processes[new_id] = p
-    return {"ok": True, "id": new_id}
+    
+    push_log(s.handles(), f"➕ Minerador-{new_id} criado (PID: {p.pid})", "info")
+    print(f"✅ Minerador {new_id} criado com PID {p.pid}")
+    
+    time.sleep(0.15)
+    emit_state(s)
+    return {"ok": True, "id": new_id, "pid": p.pid}
 
 @app.delete("/api/miners/{miner_id}")
 def kill_miner(miner_id: int):
     s = init_state()
+    
+    print(f"❌ Tentando matar minerador {miner_id}")
+    print(f"   Processos ativos: {list(s.processes.keys())}")
+    
     proc = s.processes.get(miner_id)
     if not proc:
-        return JSONResponse({"error": "not_found"}, status_code=404)
+        print(f"   Minerador {miner_id} não encontrado!")
+        return JSONResponse({"error": "not_found", "message": f"Minerador {miner_id} não existe"}, status_code=404)
+    
+    print(f"   Processo encontrado, terminando...")
     if proc.is_alive():
         proc.terminate()
-    proc.join(timeout=0.5)
+    proc.join(timeout=1.5)
+    if proc.is_alive():
+        proc.kill()
+    
     s.processes.pop(miner_id, None)
+    
+    # Marca como terminado
     try:
-        d = dict(s.miners.get(miner_id, {}))
-        d["status"] = "terminated"
-        s.miners[miner_id] = d
-    except Exception:
+        if miner_id in s.miners:
+            d = dict(s.miners[miner_id])
+            d["status"] = "terminated"
+            s.miners[miner_id] = d
+            # Remove após 1s
+            time.sleep(0.5)
+            del s.miners[miner_id]
+    except:
         pass
+    
     push_log(s.handles(), f"❌ Minerador-{miner_id} terminado", "error")
+    emit_state(s)
+    print(f"✅ Minerador {miner_id} encerrado")
     return {"ok": True}
 
 @app.get("/api/events")
 def sse_events():
     s = init_state()
+    
     def event_generator():
+        # Estado inicial
         try:
             initial = {"type": "state", "data": snapshot(s)}
             yield f"data: {json.dumps(initial)}\n\n"
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Erro ao enviar estado inicial SSE: {e}")
+        
+        # Loop de eventos
         while True:
             try:
-                item = s.events_queue.get(timeout=1.0)
+                item = s.events_queue.get(timeout=1.5)
                 yield f"data: {json.dumps(item)}\n\n"
-            except Exception:
-                yield "data: {\"type\":\"ping\"}\n\n"
-                time.sleep(0.2)
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            except:
+                # Heartbeat
+                yield ": ping\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    print("🚀 Iniciando servidor na porta 8000...")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

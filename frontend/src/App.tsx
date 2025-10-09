@@ -1,4 +1,4 @@
-import SpaceMiningGameBackend from './jogo_backend';
+import SpaceMiningGame from './jogo_backend';
 export default function App() {
-  return <SpaceMiningGameBackend />;
+  return <SpaceMiningGame />;
 }
