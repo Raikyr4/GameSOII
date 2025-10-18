@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Rocket, Zap, Database, Users, Play, Pause, RotateCcw, AlertCircle, Lock, Wifi, WifiOff, TrendingUp } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Rocket, Zap, Database, Users, Play, Pause, RotateCcw, AlertCircle, Lock, Wifi, WifiOff, TrendingUp, AlertTriangle } from 'lucide-react';
 
 type Miner = {
   id: number;
@@ -7,14 +7,14 @@ type Miner = {
   x: number;
   y: number;
   color: string;
-  status: 'idle' | 'waiting' | 'mining' | 'terminated';
+  status: 'idle' | 'waiting' | 'mining' | 'terminated' | 'blocked' | 'no_energy';
   mined: number;
   locked: boolean;
   target: string | null;
 };
 
 type Resources = { minerals: number; energy: number; crystals: number; };
-type Stats = { totalMined: number; conflicts: number; synchronized: number; };
+type Stats = { totalMined: number; conflicts: number; synchronized: number; energyDepleted: number; };
 type LogEntry = { time: string; level: 'info'|'success'|'warning'|'error'; message: string; };
 
 const API_BASE = 'http://localhost:8000';
@@ -24,7 +24,7 @@ const SpaceMiningGame = () => {
   const [resources, setResources] = useState<Resources>({ minerals: 100, energy: 100, crystals: 50 });
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isRunning, setIsRunning] = useState(false);
-  const [stats, setStats] = useState<Stats>({ totalMined: 0, conflicts: 0, synchronized: 0 });
+  const [stats, setStats] = useState<Stats>({ totalMined: 0, conflicts: 0, synchronized: 0, energyDepleted: 0 });
   const [connected, setConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +32,6 @@ const SpaceMiningGame = () => {
   const logsEndRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  // Limpar erro após 5 segundos
   useEffect(() => {
     if (error) {
       const timer = setTimeout(() => setError(null), 5000);
@@ -40,7 +39,6 @@ const SpaceMiningGame = () => {
     }
   }, [error]);
 
-  // Conexão SSE
   useEffect(() => {
     let reconnectTimer: any = null;
     let isUnmounted = false;
@@ -66,7 +64,7 @@ const SpaceMiningGame = () => {
             const d = msg.data;
             setResources(d.resources || { minerals: 0, energy: 0, crystals: 0 });
             setMiners(d.miners || {});
-            setStats(d.stats || { totalMined: 0, conflicts: 0, synchronized: 0 });
+            setStats(d.stats || { totalMined: 0, conflicts: 0, synchronized: 0, energyDepleted: 0 });
             setIsRunning(d.isRunning || false);
             
             if (d.logs && Array.isArray(d.logs)) {
@@ -100,7 +98,6 @@ const SpaceMiningGame = () => {
     };
   }, []);
 
-  // Ações API
   const apiCall = async (url: string, options: RequestInit = {}) => {
     setIsLoading(true);
     try {
@@ -161,22 +158,23 @@ const SpaceMiningGame = () => {
   const activeMiners = minersArray.length;
   const miningMiners = minersArray.filter(m => m.status === 'mining').length;
   const waitingMiners = minersArray.filter(m => m.status === 'waiting').length;
+  const noEnergyMiners = minersArray.filter(m => m.status === 'no_energy').length;
   const efficiency = stats.synchronized > 0 
     ? Math.round(((stats.synchronized / (stats.synchronized + stats.conflicts)) * 100))
     : 0;
 
+  const energyLevel = resources.energy < 20 ? 'critical' : resources.energy < 50 ? 'low' : 'normal';
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6">
       <div className="max-w-7xl mx-auto">
-        {/* Erro */}
         {error && (
-          <div className="fixed top-4 right-4 z-50 bg-red-500 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3">
+          <div className="fixed top-4 right-4 z-50 bg-red-500 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-pulse">
             <AlertCircle size={24} />
             <span className="font-semibold">{error}</span>
           </div>
         )}
 
-        {/* Loading */}
         {isLoading && (
           <div className="fixed inset-0 bg-black/30 z-40 flex items-center justify-center">
             <div className="bg-slate-800 p-6 rounded-xl">
@@ -240,11 +238,15 @@ const SpaceMiningGame = () => {
                 <span className="bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded-full font-semibold">
                   ⏳ {waitingMiners}
                 </span>
+                {noEnergyMiners > 0 && (
+                  <span className="bg-red-500/20 text-red-400 px-3 py-1 rounded-full font-semibold animate-pulse">
+                    ⚡ {noEnergyMiners}
+                  </span>
+                )}
               </div>
             </div>
             
             <div className="relative bg-slate-900 rounded-xl h-96 overflow-hidden border-2 border-purple-500/30">
-              {/* Grid */}
               <div className="absolute inset-0" style={{
                 backgroundImage: 'radial-gradient(circle, #8b5cf644 1px, transparent 1px)',
                 backgroundSize: '30px 30px'
@@ -299,7 +301,15 @@ const SpaceMiningGame = () => {
                       </div>
                     )}
                     
-                    {miner.target && (
+                    {miner.status === 'no_energy' && (
+                      <div className="absolute -top-12 left-1/2 transform -translate-x-1/2">
+                        <div className="bg-red-500 rounded-full p-1 animate-pulse">
+                          <AlertTriangle size={14} className="text-white" />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {miner.target && miner.status !== 'no_energy' && (
                       <div className="absolute -top-14 left-1/2 transform -translate-x-1/2 whitespace-nowrap">
                         <span className="text-xs font-bold text-white bg-purple-600 px-2 py-1 rounded">
                           {miner.target === 'minerals' ? '⛏️' : '💎'}
@@ -310,10 +320,10 @@ const SpaceMiningGame = () => {
                     <div
                       className={`w-12 h-12 rounded-full flex items-center justify-center border-4 transition-all ${
                         miner.status === 'mining' ? 'animate-pulse scale-110' : ''
-                      }`}
+                      } ${miner.status === 'no_energy' ? 'opacity-50 grayscale' : ''}`}
                       style={{ 
                         backgroundColor: miner.color,
-                        borderColor: miner.locked ? '#fbbf24' : 'white',
+                        borderColor: miner.locked ? '#fbbf24' : miner.status === 'no_energy' ? '#ef4444' : 'white',
                         boxShadow: miner.locked ? `0 0 20px ${miner.color}` : 'none'
                       }}
                     >
@@ -377,16 +387,31 @@ const SpaceMiningGame = () => {
                 </div>
               </div>
               
-              <div className="bg-slate-900 rounded-lg p-4 border border-yellow-500/30">
-                <div className="text-yellow-400 text-sm mb-2 font-semibold">⚡ Energia</div>
+              <div className={`bg-slate-900 rounded-lg p-4 border ${
+                energyLevel === 'critical' ? 'border-red-500 animate-pulse' :
+                energyLevel === 'low' ? 'border-yellow-500' : 'border-yellow-500/30'
+              }`}>
+                <div className={`text-sm mb-2 font-semibold flex items-center gap-2 ${
+                  energyLevel === 'critical' ? 'text-red-400' :
+                  energyLevel === 'low' ? 'text-yellow-400' : 'text-yellow-400'
+                }`}>
+                  ⚡ Energia
+                  {energyLevel === 'critical' && <AlertTriangle size={14} className="animate-pulse" />}
+                </div>
                 <div className="flex items-center gap-2">
                   <div className="flex-1 bg-slate-700 rounded-full h-3 overflow-hidden">
                     <div 
-                      className="bg-gradient-to-r from-yellow-600 to-yellow-400 h-full transition-all duration-500"
+                      className={`h-full transition-all duration-500 ${
+                        energyLevel === 'critical' ? 'bg-gradient-to-r from-red-600 to-red-400' :
+                        energyLevel === 'low' ? 'bg-gradient-to-r from-orange-600 to-yellow-400' :
+                        'bg-gradient-to-r from-yellow-600 to-yellow-400'
+                      }`}
                       style={{ width: `${resources.energy}%` }}
                     />
                   </div>
-                  <span className="text-white font-bold text-lg w-12 text-right">
+                  <span className={`font-bold text-lg w-12 text-right ${
+                    energyLevel === 'critical' ? 'text-red-400' : 'text-white'
+                  }`}>
                     {Math.floor(resources.energy)}
                   </span>
                 </div>
@@ -421,10 +446,13 @@ const SpaceMiningGame = () => {
                         <div className="text-white font-semibold text-sm flex items-center gap-2">
                           {miner.name}
                           {miner.locked && <Lock size={12} className="text-yellow-400" />}
+                          {miner.status === 'no_energy' && <AlertTriangle size={12} className="text-red-400 animate-pulse" />}
                         </div>
                         <div className="text-slate-400 text-xs flex items-center gap-2">
                           {miner.status === 'mining' && <span className="text-green-400">⛏️ Minerando</span>}
                           {miner.status === 'waiting' && <span className="text-yellow-400">⏳ Aguardando</span>}
+                          {miner.status === 'blocked' && <span className="text-orange-400">🚫 Bloqueado</span>}
+                          {miner.status === 'no_energy' && <span className="text-red-400">⚡ Sem energia</span>}
                           {miner.status === 'idle' && <span>💤 Ocioso</span>}
                           {miner.mined > 0 && <span className="text-purple-400">• {miner.mined}</span>}
                         </div>
@@ -466,6 +494,10 @@ const SpaceMiningGame = () => {
                 <div className="flex justify-between items-center p-3 bg-slate-900/50 rounded-lg">
                   <span className="text-slate-400">Conflitos:</span>
                   <span className="text-red-400 font-bold text-xl">{stats.conflicts}</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-slate-900/50 rounded-lg">
+                  <span className="text-slate-400">Sem Energia:</span>
+                  <span className="text-orange-400 font-bold text-xl">{stats.energyDepleted}</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-slate-900/50 rounded-lg">
                   <span className="text-slate-400">Processos:</span>
@@ -529,4 +561,4 @@ const SpaceMiningGame = () => {
   );
 };
 
-export default SpaceMiningGame
+export default SpaceMiningGame;

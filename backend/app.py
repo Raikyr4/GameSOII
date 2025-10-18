@@ -82,7 +82,12 @@ def init_state() -> State:
         energy=mp.Value('i', 100),
         crystals=mp.Value('i', 50),
         running=mp.Value('b', False),
-        stats=manager.dict({"totalMined": 0, "conflicts": 0, "synchronized": 0}),
+        stats=manager.dict({
+            "totalMined": 0, 
+            "conflicts": 0, 
+            "synchronized": 0,
+            "energyDepleted": 0
+        }),
         logs=manager.list(),
         shared_mem=manager.list(),
         miners=manager.dict(),
@@ -128,6 +133,7 @@ def make_state_from_handles(h: SharedHandles) -> Dict[str, Any]:
                 "totalMined": int(h.stats.get("totalMined", 0)),
                 "conflicts": int(h.stats.get("conflicts", 0)),
                 "synchronized": int(h.stats.get("synchronized", 0)),
+                "energyDepleted": int(h.stats.get("energyDepleted", 0)),
             },
             "miners": {int(k): dict(h.miners[k]) for k in list(h.miners.keys())},
             "isRunning": bool(h.running.value),
@@ -135,7 +141,7 @@ def make_state_from_handles(h: SharedHandles) -> Dict[str, Any]:
     except:
         return {
             "resources": {"minerals": 0, "energy": 0, "crystals": 0},
-            "stats": {"totalMined": 0, "conflicts": 0, "synchronized": 0},
+            "stats": {"totalMined": 0, "conflicts": 0, "synchronized": 0, "energyDepleted": 0},
             "miners": {},
             "isRunning": False,
         }
@@ -207,7 +213,7 @@ def miner_worker(miner_id: int, h: SharedHandles):
                 continue
 
             # Decide se vai tentar minerar
-            attempt = random.random() < 0.6
+            attempt = random.random() < 0.7
             target = "minerals" if random.random() < 0.6 else "crystals"
 
             # Atualiza status: aguardando
@@ -221,17 +227,40 @@ def miner_worker(miner_id: int, h: SharedHandles):
                 pass
 
             if attempt:
+                # VERIFICA ENERGIA ANTES DE TENTAR MINERAR
+                energy_needed = 5 if target == "minerals" else 8
+                
+                if h.energy.value < energy_needed:
+                    # Sem energia suficiente!
+                    try:
+                        m = dict(h.miners.get(miner_id, {}))
+                        m["status"] = "no_energy"
+                        m["target"] = None
+                        h.miners[miner_id] = m
+                        
+                        if random.random() < 0.15:  # Log ocasional
+                            push_log(h, f"⚠️ {name} sem energia suficiente", "warning")
+                            h.stats["energyDepleted"] = int(h.stats.get("energyDepleted", 0)) + 1
+                    except:
+                        pass
+                    
+                    time.sleep(0.8)
+                    continue
+                
                 # Tenta adquirir semáforo
-                acquired = h.sem.acquire(timeout=0.8)
+                acquired = h.sem.acquire(timeout=1.0)
                 
                 if not acquired:
                     # Conflito!
                     try:
                         h.stats["conflicts"] = int(h.stats.get("conflicts", 0)) + 1
+                        m = dict(h.miners.get(miner_id, {}))
+                        m["status"] = "blocked"
+                        h.miners[miner_id] = m
                         print(f"[WORKER {miner_id}] Conflito detectado!")
                     except:
                         pass
-                    time.sleep(0.3 + random.random() * 0.4)
+                    time.sleep(0.4 + random.random() * 0.5)
                     continue
 
                 # Entrou na seção crítica
@@ -246,46 +275,51 @@ def miner_worker(miner_id: int, h: SharedHandles):
                         pass
 
                     # Simula tempo de mineração
-                    time.sleep(0.3 + random.random() * 0.4)
+                    time.sleep(0.4 + random.random() * 0.5)
 
-                    # Minera recurso
-                    try:
-                        if target == "minerals" and h.minerals.value > 0:
-                            delta = min(5, h.minerals.value)
-                            h.minerals.value -= delta
-                            h.energy.value = max(0, h.energy.value - 2)
-                            h.stats["totalMined"] = int(h.stats.get("totalMined", 0)) + delta
-                            h.stats["synchronized"] = int(h.stats.get("synchronized", 0)) + 1
+                    # VERIFICA ENERGIA NOVAMENTE (pode ter sido consumida por outro)
+                    if h.energy.value < energy_needed:
+                        push_log(h, f"⚠️ {name} ficou sem energia durante mineração", "warning")
+                        h.stats["energyDepleted"] = int(h.stats.get("energyDepleted", 0)) + 1
+                    else:
+                        # Minera recurso
+                        try:
+                            if target == "minerals" and h.minerals.value > 0:
+                                delta = min(5, h.minerals.value)
+                                h.minerals.value -= delta
+                                h.energy.value = max(0, h.energy.value - 5)  # CONSUMO AUMENTADO
+                                h.stats["totalMined"] = int(h.stats.get("totalMined", 0)) + delta
+                                h.stats["synchronized"] = int(h.stats.get("synchronized", 0)) + 1
 
+                                m = dict(h.miners[miner_id])
+                                m["mined"] = int(m.get("mined", 0)) + delta
+                                h.miners[miner_id] = m
+
+                                push_log(h, f"⛏️ {name} minerou {delta} minerais (-5 energia)", "success")
+                                print(f"[WORKER {miner_id}] Minerou {delta} minerais (Energia: {h.energy.value})")
+
+                            elif target == "crystals" and h.crystals.value > 0:
+                                delta = min(3, h.crystals.value)
+                                h.crystals.value -= delta
+                                h.energy.value = max(0, h.energy.value - 8)  # CONSUMO AUMENTADO
+                                h.stats["totalMined"] = int(h.stats.get("totalMined", 0)) + delta
+                                h.stats["synchronized"] = int(h.stats.get("synchronized", 0)) + 1
+
+                                m = dict(h.miners[miner_id])
+                                m["mined"] = int(m.get("mined", 0)) + delta
+                                h.miners[miner_id] = m
+
+                                push_log(h, f"💎 {name} coletou {delta} cristais (-8 energia)", "success")
+                                print(f"[WORKER {miner_id}] Coletou {delta} cristais (Energia: {h.energy.value})")
+
+                            # Move após minerar
                             m = dict(h.miners[miner_id])
-                            m["mined"] = int(m.get("mined", 0)) + delta
+                            m["x"] = max(25, min(675, m["x"] + random.uniform(-80, 80)))
+                            m["y"] = max(25, min(375, m["y"] + random.uniform(-60, 60)))
                             h.miners[miner_id] = m
 
-                            push_log(h, f"⛏️ {name} minerou {delta} minerais", "success")
-                            print(f"[WORKER {miner_id}] Minerou {delta} minerais")
-
-                        elif target == "crystals" and h.crystals.value > 0:
-                            delta = min(3, h.crystals.value)
-                            h.crystals.value -= delta
-                            h.energy.value = max(0, h.energy.value - 3)
-                            h.stats["totalMined"] = int(h.stats.get("totalMined", 0)) + delta
-                            h.stats["synchronized"] = int(h.stats.get("synchronized", 0)) + 1
-
-                            m = dict(h.miners[miner_id])
-                            m["mined"] = int(m.get("mined", 0)) + delta
-                            h.miners[miner_id] = m
-
-                            push_log(h, f"💎 {name} coletou {delta} cristais", "success")
-                            print(f"[WORKER {miner_id}] Coletou {delta} cristais")
-
-                        # Move após minerar
-                        m = dict(h.miners[miner_id])
-                        m["x"] = max(25, min(675, m["x"] + random.uniform(-80, 80)))
-                        m["y"] = max(25, min(375, m["y"] + random.uniform(-60, 60)))
-                        h.miners[miner_id] = m
-
-                    except Exception as e:
-                        print(f"[WORKER {miner_id}] Erro ao minerar: {e}")
+                        except Exception as e:
+                            print(f"[WORKER {miner_id}] Erro ao minerar: {e}")
 
                 finally:
                     # Libera lock e semáforo
@@ -299,6 +333,12 @@ def miner_worker(miner_id: int, h: SharedHandles):
                         pass
                     
                     h.sem.release()
+                    
+                    # EMITE ESTADO APÓS MINERAÇÃO
+                    try:
+                        h.events_queue.put_nowait({"type": "state", "data": make_state_from_handles(h)})
+                    except:
+                        pass
 
             else:
                 # Movimento sem minerar
@@ -313,7 +353,7 @@ def miner_worker(miner_id: int, h: SharedHandles):
                     pass
 
             # Pausa entre ações
-            time.sleep(0.4 + random.random() * 0.6)
+            time.sleep(0.5 + random.random() * 0.7)
 
     except KeyboardInterrupt:
         print(f"[WORKER {miner_id}] Interrompido por usuário")
@@ -334,22 +374,31 @@ def miner_worker(miner_id: int, h: SharedHandles):
 def regenerator_worker(h: SharedHandles):
     print("[REGEN] Processo de regeneração iniciado")
     try:
+        tick = 0
         while True:
+            tick += 1
             try:
-                h.minerals.value = min(100, h.minerals.value + 2)
-                h.energy.value = min(100, h.energy.value + 3)
+                # REGENERAÇÃO MAIS LENTA E BALANCEADA
+                h.minerals.value = min(100, h.minerals.value + 1)  # Reduzido de 2 para 1
+                h.energy.value = min(100, h.energy.value + 2)      # Reduzido de 3 para 2
                 
-                if int(time.time()) % 3 == 0:
+                # Cristais a cada 5 ticks (~1.25 segundos)
+                if tick % 5 == 0:
                     h.crystals.value = min(50, h.crystals.value + 1)
-            except:
-                pass
+                
+                # Log de energia baixa
+                if h.energy.value < 20 and tick % 8 == 0:
+                    push_log(h, f"⚡ Energia baixa: {h.energy.value}%", "warning")
+                    
+            except Exception as e:
+                print(f"[REGEN] Erro ao regenerar: {e}")
 
             try:
                 h.events_queue.put_nowait({"type": "state", "data": make_state_from_handles(h)})
             except:
                 pass
 
-            time.sleep(0.25)
+            time.sleep(0.25)  # 4 vezes por segundo
     except KeyboardInterrupt:
         print("[REGEN] Interrompido")
     except Exception as e:
@@ -358,7 +407,7 @@ def regenerator_worker(h: SharedHandles):
 # ----------------------------
 # FastAPI
 # ----------------------------
-app = FastAPI(title="Shared Memory Mining", version="2.0.0")
+app = FastAPI(title="Shared Memory Mining", version="2.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -430,6 +479,7 @@ def reset():
     s.stats["totalMined"] = 0
     s.stats["conflicts"] = 0
     s.stats["synchronized"] = 0
+    s.stats["energyDepleted"] = 0
     s.minerals.value = 100
     s.energy.value = 100
     s.crystals.value = 50
