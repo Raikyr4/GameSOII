@@ -4,7 +4,7 @@
 
 **Disciplina:** Sistemas Operacionais  
 **Data:** Outubro de 2025  
-**Autores:** [Inserir nomes dos integrantes]
+**Autores:** [Raiky Sahb, Elias Gabriel Da Silva Nunes e Pedro Viana]
 
 ---
 
