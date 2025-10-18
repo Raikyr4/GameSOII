@@ -404,8 +404,3 @@ O projeto atende a todos os requisitos do enunciado, implementando um cenário c
 5. psutil Documentation. **Process management and system utilities**. Disponível em: https://psutil.readthedocs.io/
 
 ---
-
-**Anexos:**
-- Código-fonte completo: `app.py`, `jogo_backend.tsx`, `monitoring.py`
-- Vídeo demonstrativo: `demonstracao.mp4` (5-8 minutos)
-- Capturas de tela: `evidencias.pdf`
