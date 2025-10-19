@@ -4,7 +4,7 @@
 
 **Disciplina:** Sistemas Operacionais  
 **Data:** Outubro de 2025  
-**Autores:** [Inserir nomes dos integrantes]
+**Autores:** [Raiky Sahb, Elias Gabriel Da Silva Nunes e Pedro Viana]
 
 ---
 
@@ -31,24 +31,24 @@ O sistema implementa o padrão **Produtor-Consumidor**, onde o regenerador produ
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    PROCESSO PRINCIPAL                        │
-│                     (FastAPI Server)                         │
-│                                                              │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │           MEMÓRIA COMPARTILHADA (Manager)          │    │
-│  │                                                     │    │
-│  │  • minerals (Value)      • stats (Dict)           │    │
-│  │  • energy (Value)        • logs (List)            │    │
-│  │  • crystals (Value)      • miners (Dict)          │    │
-│  │  • running (Value)       • events_queue (Queue)   │    │
-│  │                                                     │    │
-│  │  SINCRONIZAÇÃO:                                    │    │
-│  │  • sem (Semaphore) - Proteção seção crítica       │    │
-│  │  • lock (Lock) - Operações atômicas               │    │
-│  └────────────────────────────────────────────────────┘    │
-│                           ▲                                  │
-│                           │                                  │
-│          ┌────────────────┼────────────────┐               │
+│                    PROCESSO PRINCIPAL                       |
+│                     (FastAPI Server)                        │
+│                                                             │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │           MEMÓRIA COMPARTILHADA (Manager)          │     │
+│  │                                                    │     │
+│  │  • minerals (Value)      • stats (Dict)            │     │
+│  │  • energy (Value)        • logs (List)             │     │
+│  │  • crystals (Value)      • miners (Dict)           │     │
+│  │  • running (Value)       • events_queue (Queue)    │     │
+│  │                                                    │     │
+│  │  SINCRONIZAÇÃO:                                    │     │
+│  │  • sem (Semaphore) - Proteção seção crítica        │     │
+│  │  • lock (Lock) - Operações atômicas                │     │
+│  └────────────────────────────────────────────────────┘     │
+│                           ▲                                 │
+│                           │                                 │
+│          ┌────────────────┼────────────────┐                |
 │          │                │                │                │
 └──────────┼────────────────┼────────────────┼────────────────┘
            │                │                │
@@ -66,43 +66,43 @@ O sistema implementa o padrão **Produtor-Consumidor**, onde o regenerador produ
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    MEMÓRIA COMPARTILHADA                      │
+│                    MEMÓRIA COMPARTILHADA                     │
 ├──────────────────────────────────────────────────────────────┤
-│                                                               │
-│  RECURSOS (mp.Value - Inteiro Compartilhado)                │
-│  ┌──────────────┬──────────────┬─────────────┐             │
-│  │  minerals    │   energy     │  crystals   │             │
-│  │  (0-100)     │   (0-100)    │  (0-50)     │             │
-│  └──────────────┴──────────────┴─────────────┘             │
-│                                                               │
+│                                                              │
+│  RECURSOS (mp.Value - Inteiro Compartilhado)                 │
+│  ┌──────────────┬──────────────┬─────────────┐               │
+│  │  minerals    │   energy     │  crystals   │               │ 
+│  │  (0-100)     │   (0-100)    │  (0-50)     │               │
+│  └──────────────┴──────────────┴─────────────┘               │
+│                                                              │
 │  ESTADO (mp.Manager.Dict)                                    │
-│  ┌─────────────────────────────────────────────┐            │
-│  │ miners: {                                    │            │
-│  │   0: {id, name, x, y, status, mined, ...}  │            │
-│  │   1: {id, name, x, y, status, mined, ...}  │            │
-│  │ }                                            │            │
-│  └─────────────────────────────────────────────┘            │
-│                                                               │
-│  ESTATÍSTICAS (mp.Manager.Dict)                             │
-│  ┌─────────────────────────────────────────────┐            │
-│  │ totalMined, conflicts, synchronized,        │            │
-│  │ energyDepleted                               │            │
-│  └─────────────────────────────────────────────┘            │
-│                                                               │
-│  LOGS (mp.Manager.List)                                     │
-│  ┌─────────────────────────────────────────────┐            │
-│  │ [{time, level, message}, ...]               │            │
-│  └─────────────────────────────────────────────┘            │
-│                                                               │
+│  ┌─────────────────────────────────────────────┐             │
+│  │ miners: {                                   │             │
+│  │   0: {id, name, x, y, status, mined, ...}   │             │
+│  │   1: {id, name, x, y, status, mined, ...}   │             │
+│  │ }                                           │             │
+│  └─────────────────────────────────────────────┘             │
+│                                                              │
+│  ESTATÍSTICAS (mp.Manager.Dict)                              │
+│  ┌─────────────────────────────────────────────┐             │
+│  │ totalMined, conflicts, synchronized,        │             │
+│  │ energyDepleted                              │             │
+│  └─────────────────────────────────────────────┘             │
+│                                                              │
+│  LOGS (mp.Manager.List)                                      │
+│  ┌─────────────────────────────────────────────┐             │
+│  │ [{time, level, message}, ...]               │             │
+│  └─────────────────────────────────────────────┘             │
+│                                                              │
 │  SINCRONIZAÇÃO                                               │
-│  ┌──────────────┬───────────────────────────┐              │
-│  │  Semaphore   │  Controla acesso à seção  │              │
-│  │  (count=1)   │  crítica (mineração)      │              │
-│  └──────────────┴───────────────────────────┘              │
-│  ┌──────────────┬───────────────────────────┐              │
-│  │  Lock        │  Operações atômicas em    │              │
-│  │              │  estruturas compartilhadas │              │
-│  └──────────────┴───────────────────────────┘              │
+│  ┌──────────────┬───────────────────────────┐                │
+│  │  Semaphore   │  Controla acesso à seção  │                │
+│  │  (count=1)   │  crítica (mineração)      │                │
+│  └──────────────┴───────────────────────────┘                │
+│  ┌──────────────┬───────────────────────────┐                |
+│  │  Lock        │  Operações atômicas em    │                │
+│  │              │  estruturas compartilhadas│                │
+│  └──────────────┴───────────────────────────┘                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -120,25 +120,25 @@ O sistema implementa o padrão **Produtor-Consumidor**, onde o regenerador produ
               ┌────────▼─────────┐
               │ Loop Principal   │◄──────────┐
               └────────┬─────────┘           │
-                       │                      │
+                       │                     │
               ┌────────▼─────────┐           │
-              │ running == True? │──Não─────┤
+              │ running == True? │──Não──────┤
               └────────┬─────────┘           │
-                      Sim                     │
+                      Sim                    │
               ┌────────▼─────────┐           │
-              │ energy >= 5/8?   │──Não─────┤
-              └────────┬─────────┘  (no_energy)
-                      Sim                     │
+              │ energy >= 5/8?   │──Não──────┤
+              └────────┬─────────┘(no_energy)|
+                      Sim                    │
               ┌────────▼─────────┐           │
               │ Tentar adquirir  │           │
               │   sem.acquire()  │           │
               └────────┬─────────┘           │
-                       │                      │
+                       │                     │
               ┌────────▼─────────┐           │
-              │   Adquirido?     │──Não─────┤
-              └────────┬─────────┘  (conflict++)
-                      Sim                     │
-         ┏━━━━━━━━━━━━▼━━━━━━━━━━━━┓        │
+              │   Adquirido?     │──Não──────┤
+              └────────┬─────────(conflict++)|
+                      Sim                    │
+         ┏━━━━━━━━━━━━▼━━━━━━━━━━━━━┓        │
          ┃    SEÇÃO CRÍTICA         ┃        │
          ┃  ┌────────────────────┐  ┃        │
          ┃  │ 1. locked = True   │  ┃        │
@@ -151,13 +151,13 @@ O sistema implementa o padrão **Produtor-Consumidor**, onde o regenerador produ
          ┃  ┌────────────────────┐  ┃        │
          ┃  │  sem.release()     │  ┃        │
          ┃  └────────────────────┘  ┃        │
-         ┗━━━━━━━━━━━━┬━━━━━━━━━━━━┛        │
-                       │                      │
+         ┗━━━━━━━━━━━━┬━━━━━━━━━━━━┛         │
+                       │                     │
               ┌────────▼─────────┐           │
               │  Sleep (0.5-1s)  │           │
               └────────┬─────────┘           │
-                       │                      │
-                       └──────────────────────┘
+                       │                     │
+                       └─────────────────────┘
 ```
 
 ---
@@ -404,8 +404,3 @@ O projeto atende a todos os requisitos do enunciado, implementando um cenário c
 5. psutil Documentation. **Process management and system utilities**. Disponível em: https://psutil.readthedocs.io/
 
 ---
-
-**Anexos:**
-- Código-fonte completo: `app.py`, `jogo_backend.tsx`, `monitoring.py`
-- Vídeo demonstrativo: `demonstracao.mp4` (5-8 minutos)
-- Capturas de tela: `evidencias.pdf`
